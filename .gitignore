@@ -1,0 +1,53 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+efi-venv/
+env/
+ENV/
+
+# Flask instance folder
+instance/
+*.sqlite
+*.db
+
+# Pytest cache
+.pytest_cache/
+
+# VS Code / JetBrains
+.vscode/
+.idea/
+
+# MacOS
+.DS_Store
+
+# Logs
+*.log
+
+# Secrets / config
+*.env
+.env
+
+# Coverage reports
+htmlcov/
+.coverage
+coverage.xml
+*.cover
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Node modules if any (React frontend)
+node_modules/
+
+# Jupyter notebooks checkpoints
+.ipynb_checkpoints/
+
+# MySQL dump (if created)
+*.sql
