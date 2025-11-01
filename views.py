@@ -88,9 +88,11 @@ class AuthLoginAPI(MethodView):
             return {"error": "Credenciales inválidas"}, 401
         if not bcrypt.verify(data["password"], user.credential.password_hash):
             return {"error": "Credenciales inválidas"}, 401
+        if not user.is_active:
+            return {"error": "Usuario desactivado"}, 403
         identity = str(user.id)
         claims = {"role": user.role, "email": user.email, "username": user.username}
-        token = create_access_token(identity=identity, additional_claims=claims, expires_delta=timedelta(minutes=15))
+        token = create_access_token(identity=identity, additional_claims=claims, expires_delta=timedelta(minutes=30))
         return {"access_token": token}, 200
 
 class UserRoleUpdateAPI(MethodView):
@@ -127,12 +129,28 @@ class PostAPI(MethodView):
             data = PostSchema().load(request.json)
         except ValidationError as err:
             return {"error": err.messages}, 400
+
         claims = get_jwt()
-        data["usuario_id"] = int(claims.get("sub"))
-        post = Post(**data)
+        user_id = int(claims.get("sub"))
+
+        # Extraer categorías si existen
+        categorias_ids = request.json.get("categorias", [])
+
+        post = Post(
+            titulo=data["titulo"],
+            contenido=data["contenido"],
+            usuario_id=user_id
+        )
+
+        # Asociar categorías
+        if categorias_ids:
+            categorias = Categoria.query.filter(Categoria.id.in_(categorias_ids)).all()
+            post.categorias = categorias
+
         db.session.add(post)
         db.session.commit()
         return PostSchema().dump(post), 201
+
 
 class PostDetailAPI(MethodView):
     def get(self, id):
@@ -142,14 +160,25 @@ class PostDetailAPI(MethodView):
     @jwt_required()
     def put(self, id):
         post = Post.query.get_or_404(id)
+
         if not check_ownership(post.usuario_id):
             return {"error": "acceso denegado"}, 403
+
         try:
             data = PostSchema().load(request.json, partial=True)
         except ValidationError as err:
             return {"error": err.messages}, 400
+
+        # Actualizar campos básicos
         for key, value in data.items():
             setattr(post, key, value)
+
+        # Actualizar categorías si se mandan
+        categorias_ids = request.json.get("categorias")
+        if categorias_ids is not None:
+            categorias = Categoria.query.filter(Categoria.id.in_(categorias_ids)).all()
+            post.categorias = categorias
+
         db.session.commit()
         return PostSchema().dump(post), 200
 
@@ -161,6 +190,7 @@ class PostDetailAPI(MethodView):
         db.session.delete(post)
         db.session.commit()
         return {"message": "Post eliminado"}, 200
+
 
 # --- COMENTARIOS ---
 class ComentarioAPI(MethodView):

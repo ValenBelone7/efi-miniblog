@@ -26,6 +26,7 @@ class PostSchema(Schema):
    updated_at = fields.DateTime(dump_only=True)
    is_published = fields.Bool()
    usuario_id = fields.Int()
+   categorias = fields.List(fields.Int())
 
 class ComentarioSchema(Schema):
    id = fields.Int(dump_only=True)

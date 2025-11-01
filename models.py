@@ -1,6 +1,5 @@
 from datetime import datetime
 from flask_sqlalchemy import SQLAlchemy
-from werkzeug.security import generate_password_hash, check_password_hash
 
 db = SQLAlchemy()
 
@@ -18,13 +17,6 @@ class Usuario(db.Model):
     role = db.Column(db.String(20), default='user')
     is_active = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-
-    def set_password(self, password):
-        self.password_hash = generate_password_hash(password)
-
-    def check_password(self, password):
-        return check_password_hash(self.password_hash, password)
-
 
 class Credenciales(db.Model):
     __tablename__ = "credenciales"
