@@ -1,13 +1,19 @@
 from flask import request, jsonify
 from flask.views import MethodView
-from flask_jwt_extended import jwt_required, create_access_token, get_jwt
+from flask_jwt_extended import (
+    jwt_required, create_access_token, get_jwt, get_jwt_identity
+)
 from marshmallow import ValidationError
 from passlib.hash import bcrypt
-from datetime import datetime, timedelta
+from datetime import datetime
 from functools import wraps
 
 from models import db, Usuario, Credenciales, Post, Comentario, Categoria
-from schemas import UsuarioSchema, RegisterSchema, LoginSchema, PostSchema, ComentarioSchema, CategoriaSchema, RoleUpdateSchema
+from schemas import (
+    UsuarioSchema, RegisterSchema, LoginSchema, PostSchema,
+    ComentarioSchema, CategoriaSchema, RoleUpdateSchema
+)
+
 
 # --- DECORADORES ---
 def roles_required(*allowed_roles):
@@ -23,6 +29,7 @@ def roles_required(*allowed_roles):
         return wrapper
     return decorator
 
+
 def moderator_admin_required(fn):
     @wraps(fn)
     @jwt_required()
@@ -33,32 +40,35 @@ def moderator_admin_required(fn):
         return fn(*args, **kwargs)
     return wrapper
 
+
 def check_ownership(resource_owner_id):
     claims = get_jwt()
     if claims.get("role") == "admin":
         return True
-    identity = claims.get("sub")
+    identity = get_jwt_identity()
     try:
         return int(identity) == int(resource_owner_id)
-    except:
+    except Exception:
         return False
+
 
 # --- USERS ---
 class UserAPI(MethodView):
-    @jwt_required()
     @roles_required("admin")
     def get(self):
         users = Usuario.query.all()
-        return UsuarioSchema(many=True).dump(users)
+        return UsuarioSchema(many=True).dump(users), 200
+
 
 class UserDetailAPI(MethodView):
     @jwt_required()
     def get(self, id):
         user = Usuario.query.get_or_404(id)
         claims = get_jwt()
-        if claims.get("role") == "admin" or int(claims.get("sub")) == user.id:
+        if claims.get("role") == "admin" or int(get_jwt_identity()) == user.id:
             return UsuarioSchema().dump(user), 200
         return {"error": "acceso denegado"}, 403
+
 
 class UserRegisterAPI(MethodView):
     def post(self):
@@ -66,16 +76,22 @@ class UserRegisterAPI(MethodView):
             data = RegisterSchema().load(request.json)
         except ValidationError as err:
             return {"error": err.messages}, 400
+
         if Usuario.query.filter_by(email=data["email"]).first():
             return {"error": "Email ya en uso"}, 400
+        if Usuario.query.filter_by(username=data["username"]).first():
+            return {"error": "Username ya en uso"}, 400
+
         new_user = Usuario(username=data["username"], email=data["email"])
         db.session.add(new_user)
-        db.session.flush()
+        db.session.flush()  # para obtener id
+
         password_hash = bcrypt.hash(data["password"])
         cred = Credenciales(usuario_id=new_user.id, password_hash=password_hash)
         db.session.add(cred)
         db.session.commit()
         return UsuarioSchema().dump(new_user), 201
+
 
 class AuthLoginAPI(MethodView):
     def post(self):
@@ -83,20 +99,25 @@ class AuthLoginAPI(MethodView):
             data = LoginSchema().load(request.json)
         except ValidationError as err:
             return {"error": err.messages}, 400
+
         user = Usuario.query.filter_by(email=data["email"]).first()
-        if not user or not user.credential:
+        if not user or not getattr(user, "credential", None):
             return {"error": "Credenciales inválidas"}, 401
+
         if not bcrypt.verify(data["password"], user.credential.password_hash):
             return {"error": "Credenciales inválidas"}, 401
+
         if not user.is_active:
             return {"error": "Usuario desactivado"}, 403
+
+        # Identity must be a string to satisfy PyJWT subject validation
         identity = str(user.id)
-        claims = {"role": user.role, "email": user.email, "username": user.username}
-        token = create_access_token(identity=identity, additional_claims=claims, expires_delta=timedelta(minutes=30))
-        return {"access_token": token}, 200
+        additional_claims = {"role": user.role, "email": user.email, "username": user.username}
+        access_token = create_access_token(identity=identity, additional_claims=additional_claims)
+        return {"access_token": access_token}, 200
+
 
 class UserRoleUpdateAPI(MethodView):
-    @jwt_required()
     @roles_required("admin")
     def patch(self, id):
         user = Usuario.query.get_or_404(id)
@@ -108,8 +129,8 @@ class UserRoleUpdateAPI(MethodView):
         db.session.commit()
         return {"message": f"Rol del usuario actualizado a {data['role']}"}, 200
 
+
 class UserDeactivateAPI(MethodView):
-    @jwt_required()
     @roles_required("admin")
     def patch(self, id):
         user = Usuario.query.get_or_404(id)
@@ -117,11 +138,17 @@ class UserDeactivateAPI(MethodView):
         db.session.commit()
         return {"message": f"Usuario {user.username} desactivado"}, 200
 
+
 # --- POSTS ---
 class PostAPI(MethodView):
     def get(self):
-        posts = Post.query.all()
-        return PostSchema(many=True).dump(posts)
+        posts = Post.query.filter_by(is_published=True).all()
+        result = []
+        for p in posts:
+            dumped = PostSchema().dump(p)
+            dumped["categorias_detalle"] = [{"id": c.id, "nombre": c.nombre} for c in p.categorias]
+            result.append(dumped)
+        return jsonify(result), 200
 
     @jwt_required()
     def post(self):
@@ -131,9 +158,8 @@ class PostAPI(MethodView):
             return {"error": err.messages}, 400
 
         claims = get_jwt()
-        user_id = int(claims.get("sub"))
+        user_id = int(get_jwt_identity())
 
-        # Extraer categorías si existen
         categorias_ids = request.json.get("categorias", [])
 
         post = Post(
@@ -142,20 +168,24 @@ class PostAPI(MethodView):
             usuario_id=user_id
         )
 
-        # Asociar categorías
         if categorias_ids:
             categorias = Categoria.query.filter(Categoria.id.in_(categorias_ids)).all()
             post.categorias = categorias
 
         db.session.add(post)
         db.session.commit()
-        return PostSchema().dump(post), 201
+        # preparar dump con categorias_detalle
+        post_dump = PostSchema().dump(post)
+        post_dump["categorias_detalle"] = [{"id": c.id, "nombre": c.nombre} for c in post.categorias]
+        return post_dump, 201
 
 
 class PostDetailAPI(MethodView):
     def get(self, id):
         post = Post.query.get_or_404(id)
-        return PostSchema().dump(post)
+        post_dump = PostSchema().dump(post)
+        post_dump["categorias_detalle"] = [{"id": c.id, "nombre": c.nombre} for c in post.categorias]
+        return post_dump, 200
 
     @jwt_required()
     def put(self, id):
@@ -169,18 +199,20 @@ class PostDetailAPI(MethodView):
         except ValidationError as err:
             return {"error": err.messages}, 400
 
-        # Actualizar campos básicos
         for key, value in data.items():
-            setattr(post, key, value)
+            # evitar asignar campos no permitidos directamente (ej: categorias tratado aparte)
+            if key not in ("categorias",):
+                setattr(post, key, value)
 
-        # Actualizar categorías si se mandan
         categorias_ids = request.json.get("categorias")
         if categorias_ids is not None:
             categorias = Categoria.query.filter(Categoria.id.in_(categorias_ids)).all()
             post.categorias = categorias
 
         db.session.commit()
-        return PostSchema().dump(post), 200
+        post_dump = PostSchema().dump(post)
+        post_dump["categorias_detalle"] = [{"id": c.id, "nombre": c.nombre} for c in post.categorias]
+        return post_dump, 200
 
     @jwt_required()
     def delete(self, id):
@@ -206,8 +238,7 @@ class ComentarioAPI(MethodView):
             data = ComentarioSchema().load(request.json)
         except ValidationError as err:
             return {"error": err.messages}, 400
-        claims = get_jwt()
-        user_id = int(claims["sub"])
+        user_id = int(get_jwt_identity())
         comentario = Comentario(
             texto=data["texto"],
             usuario_id=user_id,
@@ -217,18 +248,20 @@ class ComentarioAPI(MethodView):
         db.session.commit()
         return ComentarioSchema().dump(comentario), 201
 
+
 class ComentarioDetailAPI(MethodView):
     @jwt_required()
     def delete(self, id):
         comentario = Comentario.query.get_or_404(id)
         claims = get_jwt()
         role = claims.get("role")
-        user_id = int(claims.get("sub"))
+        user_id = int(get_jwt_identity())
         if role in ["admin", "moderator"] or comentario.usuario_id == user_id:
             db.session.delete(comentario)
             db.session.commit()
             return {"message": "Comentario eliminado"}, 200
         return {"error": "acceso denegado"}, 403
+
 
 # --- CATEGORÍAS ---
 class CategoriaAPI(MethodView):
@@ -236,7 +269,6 @@ class CategoriaAPI(MethodView):
         categorias = Categoria.query.all()
         return CategoriaSchema(many=True).dump(categorias), 200
 
-    @jwt_required()
     @roles_required("moderator", "admin")
     def post(self):
         try:
@@ -250,12 +282,12 @@ class CategoriaAPI(MethodView):
         db.session.commit()
         return CategoriaSchema().dump(categoria), 201
 
+
 class CategoriaDetailAPI(MethodView):
     def get(self, id):
         categoria = Categoria.query.get_or_404(id)
         return CategoriaSchema().dump(categoria), 200
 
-    @jwt_required()
     @roles_required("moderator", "admin")
     def put(self, id):
         categoria = Categoria.query.get_or_404(id)
@@ -265,24 +297,21 @@ class CategoriaDetailAPI(MethodView):
             return {"error": err.messages}, 400
 
         if "nombre" in data:
-            # Check si el nuevo nombre ya existe en otra categoría
             existing = Categoria.query.filter(Categoria.nombre == data["nombre"], Categoria.id != id).first()
             if existing:
                 return {"error": f"Categoría '{data['nombre']}' ya existe"}, 400
-
             categoria.nombre = data["nombre"]
 
         db.session.commit()
         return CategoriaSchema().dump(categoria), 200
 
-
-    @jwt_required()
     @roles_required("admin")
     def delete(self, id):
         categoria = Categoria.query.get_or_404(id)
         db.session.delete(categoria)
         db.session.commit()
         return {"message": "Categoría eliminada"}, 200
+
 
 # --- STATS ---
 class StatsAPI(MethodView):
@@ -298,8 +327,9 @@ class StatsAPI(MethodView):
         }
         claims = get_jwt()
         if claims.get("role") == "admin":
+            one_week_ago = datetime.utcnow() - datetime.timedelta(days=7) if hasattr(datetime, "timedelta") else None
+            from datetime import timedelta
             one_week_ago = datetime.utcnow() - timedelta(days=7)
             posts_last_week = Post.query.filter(Post.fecha_creacion >= one_week_ago).count()
             data["posts_last_week"] = posts_last_week
-        return jsonify(data)
-
+        return jsonify(data), 200

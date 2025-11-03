@@ -9,22 +9,28 @@ post_categoria = db.Table(
     db.Column('categoria_id', db.Integer, db.ForeignKey('categoria.id'), primary_key=True)
 )
 
+
 class Usuario(db.Model):
     __tablename__ = 'usuario'
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(50), unique=True, nullable=False)
     email = db.Column(db.String(100), unique=True, nullable=False)
-    role = db.Column(db.String(20), default='user')
-    is_active = db.Column(db.Boolean, default=True)
+    role = db.Column(db.String(20), default='user', nullable=False)
+    is_active = db.Column(db.Boolean, default=True, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    # Relaciones para facilitar consultas ORM
+    posts = db.relationship("Post", backref="usuario", lazy=True)
+    comentarios = db.relationship("Comentario", backref="usuario", lazy=True)
+    credential = db.relationship("Credenciales", uselist=False, back_populates="usuario")
+
 
 class Credenciales(db.Model):
     __tablename__ = "credenciales"
     id = db.Column(db.Integer, primary_key=True)
     usuario_id = db.Column(db.Integer, db.ForeignKey("usuario.id"), unique=True, nullable=False)
     password_hash = db.Column(db.String(256), nullable=False)
-    # role puede mantenerse en Usuario; no es necesario duplicarlo aquí
-    usuario = db.relationship("Usuario", backref=db.backref("credential", uselist=False))
+    usuario = db.relationship("Usuario", back_populates="credential")
 
 
 class Post(db.Model):
