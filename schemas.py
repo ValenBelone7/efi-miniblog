@@ -5,6 +5,7 @@ class RegisterSchema(Schema):
     username = fields.Str(required=True, validate=validate.Length(min=3))
     email = fields.Email(required=True)
     password = fields.Str(required=True, load_only=True)
+    role = fields.Str(validate=validate.OneOf(["user", "moderator", "admin"]))
 
 
 class LoginSchema(Schema):
@@ -49,4 +50,6 @@ class ComentarioSchema(Schema):
 
 class RoleUpdateSchema(Schema):
     role = fields.Str(required=True, validate=validate.OneOf(["user", "moderator", "admin"]))
+
+
 

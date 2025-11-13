@@ -69,7 +69,6 @@ class UserDetailAPI(MethodView):
             return UsuarioSchema().dump(user), 200
         return {"error": "acceso denegado"}, 403
 
-
 class UserRegisterAPI(MethodView):
     def post(self):
         try:
@@ -82,7 +81,10 @@ class UserRegisterAPI(MethodView):
         if Usuario.query.filter_by(username=data["username"]).first():
             return {"error": "Username ya en uso"}, 400
 
-        new_user = Usuario(username=data["username"], email=data["email"])
+        # Obtener role del request (default 'user')
+        role = data.get("role", "user")
+
+        new_user = Usuario(username=data["username"], email=data["email"], role=role)
         db.session.add(new_user)
         db.session.flush()  # para obtener id
 
@@ -91,7 +93,6 @@ class UserRegisterAPI(MethodView):
         db.session.add(cred)
         db.session.commit()
         return UsuarioSchema().dump(new_user), 201
-
 
 class AuthLoginAPI(MethodView):
     def post(self):
@@ -146,9 +147,17 @@ class PostAPI(MethodView):
         result = []
         for p in posts:
             dumped = PostSchema().dump(p)
-            dumped["categorias_detalle"] = [{"id": c.id, "nombre": c.nombre} for c in p.categorias]
+            dumped["categorias_detalle"] = [
+                {"id": c.id, "nombre": c.nombre} for c in p.categorias
+            ]
+            # 🔹 Agregamos autor y email
+            autor = Usuario.query.get(p.usuario_id)
+            if autor:
+                dumped["autor"] = autor.username
+                dumped["email"] = autor.email
             result.append(dumped)
         return jsonify(result), 200
+
 
     @jwt_required()
     def post(self):
@@ -184,8 +193,16 @@ class PostDetailAPI(MethodView):
     def get(self, id):
         post = Post.query.get_or_404(id)
         post_dump = PostSchema().dump(post)
-        post_dump["categorias_detalle"] = [{"id": c.id, "nombre": c.nombre} for c in post.categorias]
+        post_dump["categorias_detalle"] = [
+            {"id": c.id, "nombre": c.nombre} for c in post.categorias
+        ]
+        # 🔹 Agregamos autor y email
+        autor = Usuario.query.get(post.usuario_id)
+        if autor:
+            post_dump["autor"] = autor.username
+            post_dump["email"] = autor.email
         return post_dump, 200
+
 
     @jwt_required()
     def put(self, id):
@@ -229,7 +246,18 @@ class ComentarioAPI(MethodView):
     def get(self, post_id):
         post = Post.query.get_or_404(post_id)
         comentarios = Comentario.query.filter_by(post_id=post.id, is_visible=True).all()
-        return ComentarioSchema(many=True).dump(comentarios), 200
+        resultado = []
+        for c in comentarios:
+            d = ComentarioSchema().dump(c)
+            autor = Usuario.query.get(c.usuario_id)
+            if autor:
+                d["usuario"] = {
+                    "id": autor.id,
+                    "username": autor.username,
+                    "email": autor.email,
+                }
+            resultado.append(d)
+        return jsonify(resultado), 200
 
     @jwt_required()
     def post(self, post_id):
@@ -238,28 +266,67 @@ class ComentarioAPI(MethodView):
             data = ComentarioSchema().load(request.json)
         except ValidationError as err:
             return {"error": err.messages}, 400
+
         user_id = int(get_jwt_identity())
         comentario = Comentario(
-            texto=data["texto"],
-            usuario_id=user_id,
-            post_id=post.id
+            texto=data["texto"], usuario_id=user_id, post_id=post.id
         )
         db.session.add(comentario)
         db.session.commit()
-        return ComentarioSchema().dump(comentario), 201
+
+        autor = Usuario.query.get(user_id)
+        d = ComentarioSchema().dump(comentario)
+        if autor:
+            d["usuario"] = {
+                "id": autor.id,
+                "username": autor.username,
+                "email": autor.email,
+            }
+        return d, 201
 
 
 class ComentarioDetailAPI(MethodView):
+    @jwt_required()
+    def put(self, id):
+        comentario = Comentario.query.get_or_404(id)
+        claims = get_jwt()
+        role = claims.get("role")
+        user_id = int(get_jwt_identity())
+
+        # Sólo admin o el autor pueden editar (moderador NO puede editar ajeno)
+        if role != "admin" and comentario.usuario_id != user_id:
+            return {"error": "acceso denegado"}, 403
+
+        data = request.get_json()
+        if not data or "texto" not in data:
+            return {"error": "Texto requerido"}, 400
+
+        comentario.texto = data["texto"]
+        # Si quieres llevar control de modificaciones, añade columna fecha_modificacion en el modelo Comentario
+        db.session.commit()
+
+        autor = Usuario.query.get(comentario.usuario_id)
+        d = ComentarioSchema().dump(comentario)
+        if autor:
+            d["usuario"] = {
+                "id": autor.id,
+                "username": autor.username,
+                "email": autor.email,
+            }
+        return d, 200
+
     @jwt_required()
     def delete(self, id):
         comentario = Comentario.query.get_or_404(id)
         claims = get_jwt()
         role = claims.get("role")
         user_id = int(get_jwt_identity())
+
         if role in ["admin", "moderator"] or comentario.usuario_id == user_id:
             db.session.delete(comentario)
             db.session.commit()
             return {"message": "Comentario eliminado"}, 200
+
         return {"error": "acceso denegado"}, 403
 
 
